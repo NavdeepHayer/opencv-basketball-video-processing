@@ -13,7 +13,7 @@ def store_in_db(frame_name, features, poses, video_name):
 
     for feature, pose in zip(features, poses):
         if feature is None or pose is None:
-            print(f"Skipping storing data for frame {frame_name} due to missing features or poses.")
+            #print(f"Skipping storing data for frame {frame_name} due to missing features or poses.")
             continue
 
         cur.execute("""

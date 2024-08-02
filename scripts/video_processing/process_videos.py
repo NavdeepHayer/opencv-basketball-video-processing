@@ -48,8 +48,6 @@ def process_single_video(video_path, model, device, processed_directory, frames_
             if feature is not None and pose is not None:
                 store_player_profile(player_id, feature)
                 store_in_db(frame_name, feature, pose, os.path.basename(video_path))
-            else:
-                print(f"Skipping storing data for frame {frame_name} due to missing features or poses.")
 
         # Visualize tracking with ID
         for (x1, y1, x2, y2), player_id in zip(tracked_boxes, player_ids):
