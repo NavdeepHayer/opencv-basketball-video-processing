@@ -26,7 +26,16 @@ def estimate_poses(frame, player_boxes):
         # Estimate pose
         results = pose_estimator.process(player_region_rgb)
         pose_landmarks = results.pose_landmarks
-        poses.append(pose_landmarks)
+
+        # Convert pose landmarks to a list of dictionaries
+        if pose_landmarks:
+            landmarks = [
+                {'x': lm.x, 'y': lm.y, 'z': lm.z, 'visibility': lm.visibility}
+                for lm in pose_landmarks.landmark
+            ]
+            poses.append(landmarks)
+        else:
+            poses.append([])
 
     pose_estimator.close()
     return poses

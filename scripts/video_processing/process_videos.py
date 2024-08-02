@@ -1,7 +1,7 @@
 import os
 import cv2
 from tqdm import tqdm
-from detect_players import load_model ,process_frame
+from detect_players import load_model, detect_players
 from extract_features import extract_features
 from estimate_poses import estimate_poses
 from store_in_db import store_in_db
@@ -24,9 +24,20 @@ def process_single_video(video_path, model, device, processed_directory):
         player_boxes = detect_players(frame, model, device)
         features = extract_features(frame, player_boxes)
         poses = estimate_poses(frame, player_boxes)
+        
+        # Display the frame with detected player boxes
+        for box in player_boxes:
+            x, y, w, h = box
+            cv2.rectangle(frame, (x, y), (x + w, y + h), (255, 0, 0), 2)
+        
+        cv2.imshow("Frame Preview", frame)
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
+
         store_in_db(frame_name, features, poses, os.path.basename(video_path))
         frame_count += 1
     cap.release()
+    cv2.destroyAllWindows()
     os.rename(video_path, os.path.join(processed_directory, os.path.basename(video_path)))
 
 if __name__ == "__main__":
