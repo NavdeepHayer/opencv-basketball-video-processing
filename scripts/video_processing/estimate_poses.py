@@ -7,7 +7,7 @@ def estimate_poses(frame, player_boxes):
 
     Args:
     - frame (numpy.ndarray): The image frame.
-    - player_boxes (list): List of bounding boxes (x, y, width, height) for detected players.
+    - player_boxes (list): List of bounding boxes (x1, y1, x2, y2) for detected players.
 
     Returns:
     - list: List of pose landmarks for each player.
@@ -16,27 +16,20 @@ def estimate_poses(frame, player_boxes):
     pose_estimator = mp_pose.Pose(static_image_mode=True)
 
     poses = []
-    for box in player_boxes:
-        x, y, w, h = box
-        player_region = frame[y:y+h, x:x+w]
+    for (x1, y1, x2, y2) in player_boxes:
+        player_region = frame[y1:y2, x1:x2]
+        if player_region.size == 0:
+            print(f"Warning: Skipping invalid player region with coordinates: {(x1, y1, x2, y2)}")
+            poses.append(None)
+            continue
 
         # Convert image to RGB
         player_region_rgb = cv2.cvtColor(player_region, cv2.COLOR_BGR2RGB)
 
         # Estimate pose
         results = pose_estimator.process(player_region_rgb)
-        if results.pose_landmarks:
-            landmarks = [{'x': lm.x, 'y': lm.y, 'z': lm.z} for lm in results.pose_landmarks.landmark]
-            poses.append(landmarks)
-        else:
-            poses.append([])
+        pose_landmarks = results.pose_landmarks
+        poses.append(pose_landmarks)
 
     pose_estimator.close()
     return poses
-
-if __name__ == "__main__":
-    frame_path = "../frames/sample_video/frame_0.jpg"
-    frame = cv2.imread(frame_path)
-    player_boxes = [(100, 100, 200, 200)]  # Dummy box
-    poses = estimate_poses(frame, player_boxes)
-    print(f"Estimated poses for {len(poses)} players.")
