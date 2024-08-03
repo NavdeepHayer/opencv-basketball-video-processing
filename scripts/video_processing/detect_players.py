@@ -3,6 +3,7 @@ import torchvision
 from torchvision.models.detection import fasterrcnn_resnet50_fpn, FasterRCNN_ResNet50_FPN_Weights
 import numpy as np
 import cv2
+import torchvision.transforms as T
 
 def load_model():
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -13,23 +14,25 @@ def load_model():
     return model, device
 
 def detect_players(frame, model, device):
-    transform = torchvision.transforms.Compose([
-        torchvision.transforms.ToTensor(),
-    ])
-    frame = transform(frame).unsqueeze(0).to(device)
+    transform = T.Compose([T.ToTensor()])
+    frame_tensor = transform(frame).unsqueeze(0).to(device)
+    model.eval()
     with torch.no_grad():
-        prediction = model(frame)
+        predictions = model(frame_tensor)
 
     player_boxes = []
-    for element in prediction[0]['boxes']:
-        x1, y1, x2, y2 = element.detach().cpu().numpy().astype(int)
-        width = x2 - x1
-        height = y2 - y1
-        aspect_ratio = width / float(height)
-        # Filter boxes; adjust these thresholds as needed
-        if width > 30 and height > 60 and 0.3 < aspect_ratio < 0.7:
-            player_boxes.append((x1, y1, x2, y2))
-    return player_boxes
+    scores = []
+    # Assuming the model returns boxes and scores separately
+    if len(predictions[0]['boxes']) > 0:
+        boxes = predictions[0]['boxes'].detach().cpu().numpy()
+        scores_list = predictions[0]['scores'].detach().cpu().numpy()
+
+        for box, score in zip(boxes, scores_list):
+            if score > 0.7:  # Confidence threshold
+                player_boxes.append(box)
+                scores.append(score)
+
+    return player_boxes, scores
 
 def letterbox(im, new_shape=(640, 640), color=(114, 114, 114), auto=True, scaleFill=False, scaleup=True, stride=32):
     shape = im.shape[:2]
