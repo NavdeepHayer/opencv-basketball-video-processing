@@ -29,16 +29,16 @@ def process_all_videos(video_directory, processed_directory, frames_directory):
 def process_single_video(video_path, model, device, processed_directory, frames_directory, tracker):
     cap = cv2.VideoCapture(video_path)
     frame_count = 0
-    
+
     while cap.isOpened():
         ret, frame = cap.read()
         if not ret:
             break
-        
+
         frame_name = f"frame_{frame_count}.jpg"
         player_boxes = detect_players(frame, model, device)
-        tracked_boxes, player_ids = tracker.update(player_boxes)
-        
+        tracked_boxes, player_ids = tracker.update(frame, player_boxes)
+
         features = extract_features(frame, tracked_boxes)
         poses = estimate_poses(frame, tracked_boxes)
         frame_with_poses = draw_poses(frame, tracked_boxes, poses)  # Draw poses on the original frame
@@ -70,5 +70,3 @@ def process_single_video(video_path, model, device, processed_directory, frames_
 if __name__ == "__main__":
     process_all_videos("../../raw_videos", "../../processed_videos", "../../frames")
 
-if __name__ == "__main__":
-    process_all_videos("../../raw_videos", "../../processed_videos", "../../frames")
