@@ -21,14 +21,6 @@ def draw_poses(frame, player_boxes, poses):
                 cv2.circle(frame, (x, y), 5, (0, 255, 0), -1)
     return frame
 
-def process_all_videos(video_directory, processed_directory, frames_directory):
-    model, device = load_model()  # Ensure the model is loaded once
-    tracker = KalmanPlayerTracker()
-    videos = [f for f in os.listdir(video_directory) if f.endswith(".mp4")]
-    for video_file in tqdm(videos, desc="Processing Videos"):
-        video_path = os.path.join(video_directory, video_file)
-        process_single_video(video_path, model, device, processed_directory, frames_directory, tracker)
-
 def process_single_video(video_path, model, device, processed_directory, frames_directory, player_tracker):
     cap = cv2.VideoCapture(video_path)
     frame_count = 0
