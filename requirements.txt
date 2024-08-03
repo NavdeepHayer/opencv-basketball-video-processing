@@ -1,5 +1,6 @@
 torch
 torchvision
+tensorflow-gpu
 opencv-python
 mediapipe
 psycopg2-binary
@@ -9,3 +10,4 @@ scipy
 Pillow
 matplotlib
 pyyaml
+
