@@ -14,6 +14,7 @@ def clear_database():
         # Clear the tables
         cur.execute("TRUNCATE TABLE features RESTART IDENTITY CASCADE;")
         cur.execute("TRUNCATE TABLE frames RESTART IDENTITY CASCADE;")
+        cur.execute("TRUNCATE TABLE player_profiles RESTART IDENTITY CASCADE;")
         
         conn.commit()
         cur.close()
