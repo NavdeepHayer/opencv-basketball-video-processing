@@ -4,13 +4,12 @@ import torch
 import numpy as np
 from tqdm import tqdm
 from detect_players import load_model, detect_players
-from extract_features import extract_features
+from extract_features import extract_features, load_deep_learning_model
 from estimate_poses import estimate_poses
 from store_in_db import store_in_db
 from player_profile_db import store_player_profile
 from kalman_filter_tracking import KalmanFilter
 from player_id_tracker import PlayerIDTracker
-
 
 def draw_poses(frame, player_boxes, poses):
     for box, pose in zip(player_boxes, poses):
@@ -21,7 +20,7 @@ def draw_poses(frame, player_boxes, poses):
                 cv2.circle(frame, (x, y), 5, (0, 255, 0), -1)
     return frame
 
-def process_single_video(video_path, model, device, processed_directory, frames_directory, player_tracker):
+def process_single_video(video_path, model, device, processed_directory, frames_directory, player_tracker, feature_extraction_model):
     cap = cv2.VideoCapture(video_path)
     frame_count = 0
     player_trackers = {}
@@ -50,8 +49,8 @@ def process_single_video(video_path, model, device, processed_directory, frames_
             # Debugging: Print refined boxes and scores
             print(f"Frame {frame_count}: {len(refined_boxes)} boxes after NMS")
 
-            # Extract features for refined boxes
-            features = extract_features(frame, refined_boxes)
+            # Extract features using the deep learning model
+            features = extract_features(frame, refined_boxes, feature_extraction_model)
 
             # Assign player IDs
             player_ids = player_tracker.assign_player_id(refined_boxes, features)
@@ -92,14 +91,14 @@ def process_single_video(video_path, model, device, processed_directory, frames_
     cv2.destroyAllWindows()
     os.rename(video_path, os.path.join(processed_directory, os.path.basename(video_path)))
 
-
 if __name__ == "__main__":
     video_directory = "../../raw_videos"
     processed_directory = "../../processed_videos"
     frames_directory = "../../frames"
     model, device = load_model()
     player_tracker = PlayerIDTracker()  # Ensure this is correctly initialized
+    feature_extraction_model = load_deep_learning_model()  # Load the feature extraction model
     videos = [f for f in os.listdir(video_directory) if f.endswith(".mp4")]
     for video_file in tqdm(videos, desc="Processing Videos"):
         video_path = os.path.join(video_directory, video_file)
-        process_single_video(video_path, model, device, processed_directory, frames_directory, player_tracker)
+        process_single_video(video_path, model, device, processed_directory, frames_directory, player_tracker, feature_extraction_model)
