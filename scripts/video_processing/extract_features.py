@@ -1,47 +1,48 @@
 import cv2
-import numpy as np
 import torch
-from torchvision.models import resnet50
-from torchvision.transforms import Compose, ToTensor, Normalize, Resize
-from PIL import Image  # Import PIL Image to handle image transformations
+import torchvision  # Import torchvision here
+import torchvision.transforms as transforms
 
-def load_deep_learning_model():
-    # Load a pre-trained ResNet50 model with proper weights usage
-    model = resnet50(pretrained=True).eval()  # Set the model to evaluation mode
-    return model
-
-# Define a transformation to prepare the image patches
-transform = Compose([
-    Resize((224, 224)),
-    ToTensor(),
-    Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-])
-
-def extract_features(frame, player_boxes, model):
+def extract_features(frame, player_boxes, model, device):
     """
-    Extract features from players in a frame using a deep learning model.
+    Extract features from players in a frame using a CNN model.
 
     Args:
     - frame (numpy.ndarray): The image frame.
     - player_boxes (list): List of bounding boxes (x1, y1, x2, y2) for detected players.
-    - model (torch.nn.Module): Pre-trained deep learning model for feature extraction.
+    - model (torch.nn.Module): The feature extraction model.
+    - device (torch.device): The device to use for computations.
 
     Returns:
-    - list: List of feature tensors for each player.
+    - list: List of feature descriptors for each player.
     """
+    transform = transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Resize((224, 224)),  # Resizing to match input size of most CNNs
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+    ])
+
     features = []
     for box in player_boxes:
-        x1, y1, x2, y2 = map(int, box)
-        if x2 > x1 and y2 > y1:
-            player_region = frame[y1:y2, x1:x2]
-            player_region = cv2.cvtColor(player_region, cv2.COLOR_BGR2RGB)  # Convert to RGB
-            player_region = Image.fromarray(player_region)  # Convert numpy array to PIL Image
-            player_region = transform(player_region)  # Apply transformations
+        x1, y1, x2, y2 = map(int, box)  # Convert box coordinates to integers
+        player_region = frame[y1:y2, x1:x2]
 
-            with torch.no_grad():
-                output = model(player_region.unsqueeze(0))  # Add batch dimension
-                features.append(output.squeeze(0))  # Remove batch dimension and store the feature tensor
-        else:
+        if player_region.size == 0:
             features.append(None)
+            continue
+
+        player_region = cv2.cvtColor(player_region, cv2.COLOR_BGR2RGB)
+        player_region = transform(player_region).to(device)
+        
+        with torch.no_grad():
+            output = model(player_region.unsqueeze(0))  # Add batch dimension
+            features.append(output.cpu().numpy())
 
     return features
+
+def load_deep_learning_model():
+    # Example of loading a ResNet model
+    model = torchvision.models.resnet50(weights=torchvision.models.ResNet50_Weights.DEFAULT)
+    model.fc = torch.nn.Identity()  # Remove the classification layer to use as a feature extractor
+    return model
+
