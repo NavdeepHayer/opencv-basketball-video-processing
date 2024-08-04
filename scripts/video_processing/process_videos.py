@@ -3,7 +3,7 @@ import os
 import torch
 import numpy as np
 from tqdm import tqdm
-import torchvision  # Ensure torchvision is imported
+import torchvision
 from detect_players import load_model as load_detection_model, detect_players
 from extract_features import extract_features, load_deep_learning_model
 from estimate_poses import estimate_poses
@@ -13,7 +13,6 @@ from kalman_filter_tracking import KalmanFilter
 from player_id_tracker import PlayerIDTracker
 from trajectory_predictor import TrajectoryPredictor, load_model as load_lstm_model
 from torch.cuda.amp import autocast
-import torch.profiler
 import gc
 
 def draw_poses(frame, player_boxes, poses):
@@ -45,73 +44,55 @@ def predict_future_position(model, trajectory):
         predicted_position = model(trajectory).cpu().numpy().flatten()
     return predicted_position
 
-def collect_trajectory_data(trajectories, filename='trajectory_data.npy'):
-    data = []
-    for player_id, trajectory in trajectories.items():
-        if len(trajectory) >= 10:
-            data.append(trajectory[-10:])
-
-    with open(filename, 'ab') as f:
-        np.save(f, np.array(data))
-
 def process_single_video(video_path, model, device, processed_directory, frames_directory, player_tracker, feature_extraction_model, lstm_model=None):
     cap = cv2.VideoCapture(video_path)
     frame_count = 0
     player_trackers = {}
     trajectories = {}
     collected_data = []
-    data_write_interval = 1000  # Write data every 1000 frames
-    batch_size = 16  # Define the batch size
-    frame_batch = []  # Initialize a list to store frames in a batch
-    frame_names = []  # Store frame names for each batch
+    data_write_interval = 1000
+    batch_size = 16
+    frame_batch = []
+    frame_names = []
 
-    with torch.profiler.profile(
-        activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA],
-        record_shapes=True,
-        profile_memory=True
-    ) as prof:
+    while cap.isOpened():
+        ret, frame = cap.read()
+        if not ret:
+            break
 
-        while cap.isOpened():
-            ret, frame = cap.read()
-            if not ret:
-                break
+        frame_batch.append(frame)
+        frame_names.append(f"frame_{frame_count}.jpg")
+        frame_count += 1
 
-            frame_batch.append(frame)
-            frame_names.append(f"frame_{frame_count}.jpg")
-            frame_count += 1
-
-            if len(frame_batch) == batch_size:
-                # Process the batch
-                process_batch(frame_batch, frame_names, model, device, processed_directory, frames_directory, player_tracker, feature_extraction_model, lstm_model, trajectories, collected_data, video_path)
-                frame_batch = []  # Clear the batch
-                frame_names = []  # Clear frame names
-
-            # Save data periodically
-            if frame_count % data_write_interval == 0 and collected_data:
-                with open('trajectory_data.npy', 'ab') as f:
-                    np.save(f, np.array(collected_data))
-                collected_data.clear()
-
-        # Process any remaining frames in the batch
-        if frame_batch:
+        if len(frame_batch) == batch_size:
             process_batch(frame_batch, frame_names, model, device, processed_directory, frames_directory, player_tracker, feature_extraction_model, lstm_model, trajectories, collected_data, video_path)
+            frame_batch = []  # Clear the batch
+            frame_names = []  # Clear frame names
 
-        # Write any remaining collected data to disk
-        if collected_data:
+        if frame_count % data_write_interval == 0 and collected_data:
             with open('trajectory_data.npy', 'ab') as f:
                 np.save(f, np.array(collected_data))
+            collected_data.clear()
+
+    if frame_batch:
+        process_batch(frame_batch, frame_names, model, device, processed_directory, frames_directory, player_tracker, feature_extraction_model, lstm_model, trajectories, collected_data, video_path)
+
+    if collected_data:
+        with open('trajectory_data.npy', 'ab') as f:
+            np.save(f, np.array(collected_data))
 
     cap.release()
     cv2.destroyAllWindows()
     os.rename(video_path, os.path.join(processed_directory, os.path.basename(video_path)))
 
-    # Print profiling results
-    print(prof.key_averages().table(sort_by="cuda_time_total"))
+    # Explicit garbage collection to free up memory
+    torch.cuda.empty_cache()
+    gc.collect()
 
 def process_batch(frame_batch, frame_names, model, device, processed_directory, frames_directory, player_tracker, feature_extraction_model, lstm_model, trajectories, collected_data, video_path):
     player_trackers = {}
 
-    with autocast():
+    with autocast():  # Use autocast without arguments
         for frame_index, frame in enumerate(frame_batch):
             player_boxes, scores = detect_players(frame, model, device)
 
@@ -159,7 +140,7 @@ def process_batch(frame_batch, frame_names, model, device, processed_directory, 
                     kalman_filter = player_trackers[player_id]
                     corrected = kalman_filter.correct([x1, y1])
                     predicted = kalman_filter.predict()
-                    tracked_box = (int(predicted[0]), int(predicted[1]), x2, y2)
+                    tracked_box = (int(predicted[0].item()), int(predicted[1].item()), x2, y2)  # Ensure conversion of tensors to scalars
                     tracked_boxes.append(tracked_box)
 
                     cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
@@ -177,7 +158,6 @@ def process_batch(frame_batch, frame_names, model, device, processed_directory, 
                 if cv2.waitKey(1) & 0xFF == ord('q'):
                     return
 
-    # Clear GPU cache and collect garbage
     torch.cuda.empty_cache()
     gc.collect()
 

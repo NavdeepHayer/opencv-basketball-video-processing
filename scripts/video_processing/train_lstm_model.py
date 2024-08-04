@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset
 from sklearn.model_selection import train_test_split
-from tqdm import tqdm  # Import tqdm for progress bars
+from tqdm import tqdm
 
 class TrajectoryPredictor(nn.Module):
     def __init__(self, input_size=2, hidden_size=64, num_layers=2, output_size=2):
