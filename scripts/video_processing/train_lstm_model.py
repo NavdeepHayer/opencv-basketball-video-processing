@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset
 from sklearn.model_selection import train_test_split
+from tqdm import tqdm  # Import tqdm for progress bars
 
 class TrajectoryPredictor(nn.Module):
     def __init__(self, input_size=2, hidden_size=64, num_layers=2, output_size=2):
@@ -39,10 +40,11 @@ def train_lstm_model():
     train_dataset = TensorDataset(X_train, y_train)
     test_dataset = TensorDataset(X_test, y_test)
 
-    train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
-    test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
+    train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True, pin_memory=True)
+    test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False, pin_memory=True)
 
-    model = TrajectoryPredictor()
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    model = TrajectoryPredictor().to(device)
     criterion = nn.MSELoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 
@@ -50,13 +52,19 @@ def train_lstm_model():
     for epoch in range(num_epochs):
         model.train()
         train_loss = 0
-        for X_batch, y_batch in train_loader:
-            optimizer.zero_grad()
-            outputs = model(X_batch)
-            loss = criterion(outputs, y_batch)
-            loss.backward()
-            optimizer.step()
-            train_loss += loss.item()
+        with tqdm(total=len(train_loader), desc=f'Epoch {epoch+1}/{num_epochs}', unit='batch') as pbar:
+            for X_batch, y_batch in train_loader:
+                X_batch, y_batch = X_batch.to(device, non_blocking=True), y_batch.to(device, non_blocking=True)
+
+                optimizer.zero_grad()
+                outputs = model(X_batch)
+                loss = criterion(outputs, y_batch)
+                loss.backward()
+                optimizer.step()
+
+                train_loss += loss.item()
+                pbar.set_postfix({'Train Loss': f'{train_loss / len(train_loader):.4f}'})
+                pbar.update(1)
 
         train_loss /= len(train_loader)
 
@@ -64,6 +72,8 @@ def train_lstm_model():
         test_loss = 0
         with torch.no_grad():
             for X_batch, y_batch in test_loader:
+                X_batch, y_batch = X_batch.to(device, non_blocking=True), y_batch.to(device, non_blocking=True)
+
                 test_outputs = model(X_batch)
                 loss = criterion(test_outputs, y_batch)
                 test_loss += loss.item()
@@ -77,3 +87,4 @@ def train_lstm_model():
 
 if __name__ == "__main__":
     train_lstm_model()
+

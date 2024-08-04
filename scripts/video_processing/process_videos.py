@@ -3,6 +3,7 @@ import os
 import torch
 import numpy as np
 from tqdm import tqdm
+import torchvision  # Ensure torchvision is imported
 from detect_players import load_model as load_detection_model, detect_players
 from extract_features import extract_features, load_deep_learning_model
 from estimate_poses import estimate_poses
@@ -13,6 +14,7 @@ from player_id_tracker import PlayerIDTracker
 from trajectory_predictor import TrajectoryPredictor, load_model as load_lstm_model
 from torch.cuda.amp import autocast
 import torch.profiler
+import gc
 
 def draw_poses(frame, player_boxes, poses):
     for box, pose in zip(player_boxes, poses):
@@ -58,6 +60,10 @@ def process_single_video(video_path, model, device, processed_directory, frames_
     player_trackers = {}
     trajectories = {}
     collected_data = []
+    data_write_interval = 1000  # Write data every 1000 frames
+    batch_size = 16  # Define the batch size
+    frame_batch = []  # Initialize a list to store frames in a batch
+    frame_names = []  # Store frame names for each batch
 
     with torch.profiler.profile(
         activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA],
@@ -70,7 +76,43 @@ def process_single_video(video_path, model, device, processed_directory, frames_
             if not ret:
                 break
 
-            frame_name = f"frame_{frame_count}.jpg"
+            frame_batch.append(frame)
+            frame_names.append(f"frame_{frame_count}.jpg")
+            frame_count += 1
+
+            if len(frame_batch) == batch_size:
+                # Process the batch
+                process_batch(frame_batch, frame_names, model, device, processed_directory, frames_directory, player_tracker, feature_extraction_model, lstm_model, trajectories, collected_data, video_path)
+                frame_batch = []  # Clear the batch
+                frame_names = []  # Clear frame names
+
+            # Save data periodically
+            if frame_count % data_write_interval == 0 and collected_data:
+                with open('trajectory_data.npy', 'ab') as f:
+                    np.save(f, np.array(collected_data))
+                collected_data.clear()
+
+        # Process any remaining frames in the batch
+        if frame_batch:
+            process_batch(frame_batch, frame_names, model, device, processed_directory, frames_directory, player_tracker, feature_extraction_model, lstm_model, trajectories, collected_data, video_path)
+
+        # Write any remaining collected data to disk
+        if collected_data:
+            with open('trajectory_data.npy', 'ab') as f:
+                np.save(f, np.array(collected_data))
+
+    cap.release()
+    cv2.destroyAllWindows()
+    os.rename(video_path, os.path.join(processed_directory, os.path.basename(video_path)))
+
+    # Print profiling results
+    print(prof.key_averages().table(sort_by="cuda_time_total"))
+
+def process_batch(frame_batch, frame_names, model, device, processed_directory, frames_directory, player_tracker, feature_extraction_model, lstm_model, trajectories, collected_data, video_path):
+    player_trackers = {}
+
+    with autocast():
+        for frame_index, frame in enumerate(frame_batch):
             player_boxes, scores = detect_players(frame, model, device)
 
             if player_boxes and scores:
@@ -84,10 +126,8 @@ def process_single_video(video_path, model, device, processed_directory, frames_
                 refined_boxes = boxes_tensor[nms_indices].cpu().numpy().astype(int)
                 refined_scores = scores_tensor[nms_indices].cpu().numpy()
 
-                # Use autocast for mixed precision inference
-                with autocast():
-                    features = extract_features(frame, refined_boxes, feature_extraction_model, device)
-                    poses = estimate_poses(frame, refined_boxes)
+                features = extract_features(frame, refined_boxes, feature_extraction_model, device)
+                poses = estimate_poses(frame, refined_boxes)
 
                 player_ids = player_tracker.assign_player_id(refined_boxes, features)
 
@@ -130,23 +170,16 @@ def process_single_video(video_path, model, device, processed_directory, frames_
                 for player_id, feature, pose in zip(player_ids, features, poses):
                     if feature is not None and pose is not None:
                         store_player_profile(player_id, feature)
-                        store_in_db(frame_name, feature, pose, os.path.basename(video_path))
+                        store_in_db(frame_names[frame_index], feature, pose, os.path.basename(video_path))
 
-                cv2.imwrite(os.path.join(frames_directory, frame_name), frame_with_poses)
+                cv2.imwrite(os.path.join(frames_directory, frame_names[frame_index]), frame_with_poses)
                 cv2.imshow('Tracking and Pose Visualization', frame_with_poses)
                 if cv2.waitKey(1) & 0xFF == ord('q'):
-                    break
+                    return
 
-            frame_count += 1
-
-    cap.release()
-    cv2.destroyAllWindows()
-    os.rename(video_path, os.path.join(processed_directory, os.path.basename(video_path)))
-
-    collect_trajectory_data(trajectories)
-
-    # Print profiling results
-    print(prof.key_averages().table(sort_by="cuda_time_total"))
+    # Clear GPU cache and collect garbage
+    torch.cuda.empty_cache()
+    gc.collect()
 
 if __name__ == "__main__":
     video_directory = "../../raw_videos"
