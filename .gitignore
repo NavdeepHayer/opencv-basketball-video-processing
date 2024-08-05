@@ -167,3 +167,4 @@ raw_videos
 processed_videos
 Frames
 frames
+scripts/video_processing/trajectory_data.npy
