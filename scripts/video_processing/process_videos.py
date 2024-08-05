@@ -9,8 +9,6 @@ from datetime import datetime
 from detect_players import load_model, detect_players
 from extract_features import extract_features, load_deep_learning_model
 from estimate_poses import estimate_poses
-from store_in_db import store_in_db
-from player_profile_db import store_player_profile
 from kalman_filter_tracking import KalmanFilter
 from player_id_tracker import PlayerIDTracker
 from trajectory_predictor import load_lstm_model, predict_future_position
@@ -47,6 +45,7 @@ def process_single_video(video_path, model, device, processed_directory, frame_s
     player_trackers = {}
     trajectories = {}
     collected_data = []
+    pseudo_labeled_data = []
 
     while cap.isOpened():
         ret, frame = cap.read()
@@ -81,8 +80,16 @@ def process_single_video(video_path, model, device, processed_directory, frame_s
                 x1, y1, x2, y2 = refined_boxes[i]
                 center_x = (x1 + x2) / 2
                 center_y = (y1 + y2) / 2
+                width = x2 - x1
+                height = y2 - y1
 
-                combined_data = [center_x, center_y] + features[i].tolist()
+                # Safely extract feature points
+                feature_points = []
+                if poses[i] is not None:
+                    feature_points = [coord for fp in poses[i] if fp is not None for coord in (fp['x'], fp['y'])]
+
+                # Add height, width, and feature points to the feature vector
+                combined_data = [center_x, center_y, width, height] + features[i].tolist() + feature_points
                 trajectories[player_id].append(combined_data)
 
                 if collect_data:
@@ -95,6 +102,11 @@ def process_single_video(video_path, model, device, processed_directory, frame_s
                 if lstm_model is not None and len(trajectories[player_id]) == 10:
                     predicted_position = predict_future_position(lstm_model, trajectories[player_id])
                     logging.info(f"Predicted next position for Player {player_id}: {predicted_position}")
+
+                    # Assuming a confidence threshold of 0.7
+                    confidence = refined_scores[i]  # Use model's score for confidence
+                    if confidence > 0.7:
+                        pseudo_labeled_data.append((combined_data, predicted_position))
 
             tracked_boxes = []
             for player_id, box in zip(player_ids, refined_boxes):
@@ -113,11 +125,6 @@ def process_single_video(video_path, model, device, processed_directory, frame_s
 
             frame_with_poses = draw_poses(frame, refined_boxes, poses)
 
-            for player_id, feature, pose in zip(player_ids, features, poses):
-                if feature is not None and pose is not None:
-                    store_player_profile(player_id, feature)
-                    store_in_db(frame_name, feature, pose, os.path.basename(video_path))
-
             # Save the frame in the subdirectory based on mode
             cv2.imwrite(os.path.join(frame_subdirectory, frame_name), frame_with_poses)
             cv2.imshow('Tracking and Pose Visualization', frame_with_poses)
@@ -134,6 +141,11 @@ def process_single_video(video_path, model, device, processed_directory, frame_s
     cap.release()
     cv2.destroyAllWindows()
     os.rename(video_path, os.path.join(processed_directory, os.path.basename(video_path)))
+
+    # Add pseudo-labeled data to the dataset
+    if pseudo_labeled_data:
+        with open('trajectory_data_with_features.npy', 'ab') as f:
+            np.save(f, np.array(pseudo_labeled_data))
 
     if collect_data and collected_data:
         with open('trajectory_data_with_features.npy', 'ab') as f:
@@ -174,6 +186,21 @@ def load_and_prepare_data():
     labels = np.random.randn(1000, 2)    # 1000 labels, 2 coordinates per label
     return train_test_split(data, labels, test_size=0.2, random_state=42)
 
+def select_model(trained_models_path):
+    """ Provide options to select a model or use the latest one. """
+    trained_models = sorted(os.listdir(trained_models_path), reverse=True)
+    
+    print("Available trained models:")
+    for idx, model_date in enumerate(trained_models, start=1):
+        print(f"{idx}: {model_date}")
+    print(f"{len(trained_models) + 1}: Use the latest model ({trained_models[0]})")
+
+    model_choice = int(input("Select a model to use: "))
+    if model_choice == len(trained_models) + 1:
+        return trained_models[0]  # Use the latest model
+    else:
+        return trained_models[model_choice - 1]
+
 if __name__ == "__main__":
     video_directory = "../../raw_videos"
     processed_directory = "../../processed_videos"
@@ -189,46 +216,42 @@ if __name__ == "__main__":
         collect_data = True
         # Subdirectory for raw feature extraction
         mode_directory = os.path.join(frames_directory, "raw_feature_extraction")
-    elif mode == "2":
+    elif mode in ["2", "3"]:
         # Select trained model
         trained_models_path = os.path.abspath(os.path.join(os.getcwd(), os.pardir, os.pardir, 'trained_data'))
         raw_data_path = os.path.abspath(os.path.join(os.getcwd(), os.pardir, os.pardir, 'raw_training_data'))
-        trained_models = sorted(os.listdir(trained_models_path))
         
-        print("Available trained models:")
-        for idx, model_date in enumerate(trained_models, start=1):
-            print(f"{idx}: {model_date}")
-        
-        model_choice = int(input("Select a model to use: "))
-        model_date = trained_models[model_choice - 1]
+        # Model selection with option for the latest model
+        model_date = select_model(trained_models_path)
         model_path = os.path.join(trained_models_path, model_date, 'enhanced_trajectory_predictor.pth')
 
         # Determine input size based on training data
         trajectory_data_filename = os.path.join(raw_data_path, model_date, 'trajectory_data_with_features.npy')
         input_size = determine_input_size(trajectory_data_filename)
         lstm_model = load_lstm_model(model_path, input_size=input_size, device='cuda' if torch.cuda.is_available() else 'cpu')
-        collect_data = False
-        # Subdirectory for AI trained data
-        mode_directory = os.path.join(frames_directory, "AI_trained")
-    elif mode == "3":
-        # Add new data to trained dataset
-        lstm_model = None
-        collect_data = True
-        # Load new data
-        X_new, X_test, y_new, y_test = load_and_prepare_data()
+        
+        if mode == "2":
+            collect_data = False
+            # Subdirectory for AI trained data
+            mode_directory = os.path.join(frames_directory, "AI_trained")
+        elif mode == "3":
+            collect_data = True
+            # Subdirectory for AI trained added to raw
+            mode_directory = os.path.join(frames_directory, "AI_trained_added_to_raw")
 
-        # Load existing data
-        existing_data_path = os.path.join(os.getcwd(), 'trajectory_data_with_features.npy')
-        X_existing, y_existing = load_existing_data(existing_data_path)
+            # Load new data
+            X_new, X_test, y_new, y_test = load_and_prepare_data()
 
-        # Merge new and existing data
-        X_combined, y_combined = merge_data(X_new, y_new, X_existing, y_existing)
+            # Load existing data
+            existing_data_path = os.path.join(os.getcwd(), 'trajectory_data_with_features.npy')
+            X_existing, y_existing = load_existing_data(existing_data_path)
 
-        # Save combined data
-        combined_data = np.array(list(zip(X_combined, y_combined)))
-        np.save(existing_data_path, combined_data)
-        # Subdirectory for AI trained added to raw
-        mode_directory = os.path.join(frames_directory, "AI_trained_added_to_raw")
+            # Merge new and existing data
+            X_combined, y_combined = merge_data(X_new, y_new, X_existing, y_existing)
+
+            # Save combined data
+            combined_data = np.array(list(zip(X_combined, y_combined)))
+            np.save(existing_data_path, combined_data)
     else:
         print("Invalid mode selected.")
         exit()
