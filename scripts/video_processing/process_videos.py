@@ -38,14 +38,27 @@ def pose_similarity(pose1, pose2, threshold=0.5):
     
     return average_distance < threshold
 
-def process_single_video(video_path, model, device, processed_directory, frame_subdirectory, player_tracker, feature_extraction_model, lstm_model, collect_data=True):
+def ensure_consistent_shape(data, expected_shape):
+    """ Pad data with zeros to ensure consistent shape. """
+    padded_data = []
+    for item in data:
+        if len(item) < expected_shape:
+            # Pad with zeros if item is smaller than expected shape
+            item = np.pad(item, (0, expected_shape - len(item)), mode='constant')
+        padded_data.append(item)
+    return np.array(padded_data)
+
+def process_single_video(video_path, model, device, processed_directory, frame_subdirectory, player_tracker, feature_extraction_model, lstm_model, collect_data=True, use_pseudo_labeling=False):
     logging.info(f"Processing video: {video_path}")
     cap = cv2.VideoCapture(video_path)
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     frame_count = 0
     player_trackers = {}
     trajectories = {}
     collected_data = []
     pseudo_labeled_data = []
+
+    expected_feature_length = 0
 
     while cap.isOpened():
         ret, frame = cap.read()
@@ -92,6 +105,10 @@ def process_single_video(video_path, model, device, processed_directory, frame_s
                 combined_data = [center_x, center_y, width, height] + features[i].tolist() + feature_points
                 trajectories[player_id].append(combined_data)
 
+                # Determine expected feature length
+                if expected_feature_length == 0:
+                    expected_feature_length = len(combined_data)
+
                 if collect_data:
                     if len(trajectories[player_id]) > 1:
                         collected_data.append((trajectories[player_id][-2], combined_data))
@@ -103,10 +120,11 @@ def process_single_video(video_path, model, device, processed_directory, frame_s
                     predicted_position = predict_future_position(lstm_model, trajectories[player_id])
                     logging.info(f"Predicted next position for Player {player_id}: {predicted_position}")
 
-                    # Assuming a confidence threshold of 0.7
-                    confidence = refined_scores[i]  # Use model's score for confidence
-                    if confidence > 0.7:
-                        pseudo_labeled_data.append((combined_data, predicted_position))
+                    if use_pseudo_labeling:
+                        # Assuming a confidence threshold of 0.7
+                        confidence = refined_scores[i]  # Use model's score for confidence
+                        if confidence > 0.7:
+                            pseudo_labeled_data.append((combined_data, predicted_position))
 
             tracked_boxes = []
             for player_id, box in zip(player_ids, refined_boxes):
@@ -125,6 +143,13 @@ def process_single_video(video_path, model, device, processed_directory, frame_s
 
             frame_with_poses = draw_poses(frame, refined_boxes, poses)
 
+            # Display frame count at bottom right
+            frame_text = f"Frame {frame_count+1}/{total_frames}"
+            text_size, _ = cv2.getTextSize(frame_text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+            text_x = frame.shape[1] - text_size[0] - 10
+            text_y = frame.shape[0] - 10
+            cv2.putText(frame_with_poses, frame_text, (text_x, text_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+
             # Save the frame in the subdirectory based on mode
             cv2.imwrite(os.path.join(frame_subdirectory, frame_name), frame_with_poses)
             cv2.imshow('Tracking and Pose Visualization', frame_with_poses)
@@ -134,22 +159,27 @@ def process_single_video(video_path, model, device, processed_directory, frame_s
         frame_count += 1
 
         if collect_data and frame_count % 1000 == 0 and collected_data:
+            # Ensure collected data is of consistent shape
+            consistent_collected_data = ensure_consistent_shape(collected_data, expected_feature_length)
             with open('trajectory_data_with_features.npy', 'ab') as f:
-                np.save(f, np.array(collected_data))
+                np.save(f, consistent_collected_data)
             collected_data.clear()
 
     cap.release()
     cv2.destroyAllWindows()
     os.rename(video_path, os.path.join(processed_directory, os.path.basename(video_path)))
 
-    # Add pseudo-labeled data to the dataset
-    if pseudo_labeled_data:
+    if collect_data and pseudo_labeled_data and use_pseudo_labeling:
+        # Ensure pseudo-labeled data is of consistent shape
+        consistent_pseudo_labeled_data = ensure_consistent_shape(pseudo_labeled_data, expected_feature_length)
         with open('trajectory_data_with_features.npy', 'ab') as f:
-            np.save(f, np.array(pseudo_labeled_data))
+            np.save(f, consistent_pseudo_labeled_data)
 
     if collect_data and collected_data:
+        # Ensure collected data is of consistent shape
+        consistent_collected_data = ensure_consistent_shape(collected_data, expected_feature_length)
         with open('trajectory_data_with_features.npy', 'ab') as f:
-            np.save(f, np.array(collected_data))
+            np.save(f, consistent_collected_data)
 
 def determine_input_size(data_filename):
     """ Determine the input size based on the saved training data. """
@@ -214,6 +244,7 @@ if __name__ == "__main__":
     if mode == "1":
         lstm_model = None
         collect_data = True
+        use_pseudo_labeling = False
         # Subdirectory for raw feature extraction
         mode_directory = os.path.join(frames_directory, "raw_feature_extraction")
     elif mode in ["2", "3"]:
@@ -232,10 +263,12 @@ if __name__ == "__main__":
         
         if mode == "2":
             collect_data = False
+            use_pseudo_labeling = False
             # Subdirectory for AI trained data
             mode_directory = os.path.join(frames_directory, "AI_trained")
         elif mode == "3":
             collect_data = True
+            use_pseudo_labeling = True
             # Subdirectory for AI trained added to raw
             mode_directory = os.path.join(frames_directory, "AI_trained_added_to_raw")
 
@@ -269,5 +302,5 @@ if __name__ == "__main__":
         frame_subdirectory = os.path.join(mode_directory, f"{video_name}_{today_date}")
         os.makedirs(frame_subdirectory, exist_ok=True)
 
-        process_single_video(video_path, model, device, processed_directory, frame_subdirectory, player_tracker, feature_extraction_model, lstm_model, collect_data)
+        process_single_video(video_path, model, device, processed_directory, frame_subdirectory, player_tracker, feature_extraction_model, lstm_model, collect_data, use_pseudo_labeling)
 
