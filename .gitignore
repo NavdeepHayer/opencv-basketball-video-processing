@@ -168,3 +168,7 @@ processed_videos
 Frames
 frames
 scripts/video_processing/trajectory_data.npy
+raw_training_data
+trained_data
+scripts/video_processing/trajectory_data_with_features.npy
+
